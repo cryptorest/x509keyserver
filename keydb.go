@@ -47,6 +47,12 @@ type X509KeyDB struct {
 	db *cassandra.RetryCassandraClient
 }
 
+func mkint64(v int64) *int64 {
+	var rv *int64 = new(int64)
+	*rv = v
+	return rv
+}
+
 // List of all column names in the certificate column family.
 var certificate_DisplayColumns [][]byte = [][]byte{
 	[]byte("subject"), []byte("issuer"), []byte("expires"),
@@ -82,7 +88,6 @@ func formatCertSubject(name pkix.Name) []byte {
 // Connect to the X.509 key database given as "dbserver" and "keyspace".
 func NewX509KeyDB(dbserver, keyspace string) (*X509KeyDB, error) {
 	var client *cassandra.RetryCassandraClient
-	var ire *cassandra.InvalidRequestException
 	var err error
 
 	client, err = cassandra.NewRetryCassandraClient(dbserver)
@@ -90,10 +95,7 @@ func NewX509KeyDB(dbserver, keyspace string) (*X509KeyDB, error) {
 		return nil, err
 	}
 
-	ire, err = client.SetKeyspace(keyspace)
-	if ire != nil {
-		return nil, errors.New(ire.Why)
-	}
+	err = client.SetKeyspace(keyspace)
 	if err != nil {
 		return nil, err
 	}
@@ -111,9 +113,6 @@ func (db *X509KeyDB) ListCertificates(start_index uint64, count int32) ([]*X509K
 	var kr *cassandra.KeyRange = cassandra.NewKeyRange()
 	var r []*cassandra.KeySlice
 	var ks *cassandra.KeySlice
-	var ire *cassandra.InvalidRequestException
-	var ue *cassandra.UnavailableException
-	var te *cassandra.TimedOutException
 	var err error
 
 	cp.ColumnFamily = "certificate"
@@ -128,17 +127,7 @@ func (db *X509KeyDB) ListCertificates(start_index uint64, count int32) ([]*X509K
 	kr.EndKey = make([]byte, 0)
 	kr.Count = count
 
-	r, ire, ue, te, err = db.db.GetRangeSlices(cp, pred, kr,
-		cassandra.ConsistencyLevel_ONE)
-	if ire != nil {
-		return ret, errors.New(ire.Why)
-	}
-	if ue != nil {
-		return ret, errors.New("Unavailable")
-	}
-	if te != nil {
-		return ret, errors.New("Timed out")
-	}
+	r, err = db.db.GetRangeSlices(cp, pred, kr, cassandra.ConsistencyLevel_ONE)
 	if err != nil {
 		return ret, err
 	}
@@ -177,10 +166,6 @@ func (db *X509KeyDB) ListCertificates(start_index uint64, count int32) ([]*X509K
 func (db *X509KeyDB) RetrieveCertificateByIndex(index uint64) (*x509.Certificate, error) {
 	var cp *cassandra.ColumnPath = cassandra.NewColumnPath()
 	var r *cassandra.ColumnOrSuperColumn
-	var ire *cassandra.InvalidRequestException
-	var nfe *cassandra.NotFoundException
-	var ue *cassandra.UnavailableException
-	var te *cassandra.TimedOutException
 	var key []byte = make([]byte, 8)
 	var err error
 
@@ -189,19 +174,7 @@ func (db *X509KeyDB) RetrieveCertificateByIndex(index uint64) (*x509.Certificate
 	cp.ColumnFamily = "certificate"
 	cp.Column = []byte("der_certificate")
 
-	r, ire, nfe, ue, te, err = db.db.Get(key, cp, cassandra.ConsistencyLevel_ONE)
-	if ire != nil {
-		return nil, errors.New(ire.Why)
-	}
-	if nfe != nil {
-		return nil, errors.New("Certificate not found")
-	}
-	if ue != nil {
-		return nil, errors.New("Unavailable")
-	}
-	if te != nil {
-		return nil, errors.New("Timed out")
-	}
+	r, err = db.db.Get(key, cp, cassandra.ConsistencyLevel_ONE)
 	if err != nil {
 		return nil, err
 	}
@@ -220,10 +193,6 @@ func (db *X509KeyDB) AddX509Certificate(cert *x509.Certificate) error {
 	var mutation *cassandra.Mutation
 	var expires uint64
 	var key []byte = make([]byte, 8)
-	var ire *cassandra.InvalidRequestException
-	var ue *cassandra.UnavailableException
-	var te *cassandra.TimedOutException
-	var err error
 
 	binary.BigEndian.PutUint64(key, cert.SerialNumber.Uint64())
 	mmap[string(key)] = make(map[string][]*cassandra.Mutation)
@@ -234,7 +203,7 @@ func (db *X509KeyDB) AddX509Certificate(cert *x509.Certificate) error {
 	mutation.ColumnOrSupercolumn.Column = cassandra.NewColumn()
 	mutation.ColumnOrSupercolumn.Column.Name = []byte("subject")
 	mutation.ColumnOrSupercolumn.Column.Value = formatCertSubject(cert.Subject)
-	mutation.ColumnOrSupercolumn.Column.Timestamp = now.UnixNano()
+	mutation.ColumnOrSupercolumn.Column.Timestamp = mkint64(now.UnixNano())
 	mmap[string(key)]["certificate"] = append(
 		mmap[string(key)]["certificate"], mutation)
 
@@ -243,7 +212,7 @@ func (db *X509KeyDB) AddX509Certificate(cert *x509.Certificate) error {
 	mutation.ColumnOrSupercolumn.Column = cassandra.NewColumn()
 	mutation.ColumnOrSupercolumn.Column.Name = []byte("issuer")
 	mutation.ColumnOrSupercolumn.Column.Value = formatCertSubject(cert.Issuer)
-	mutation.ColumnOrSupercolumn.Column.Timestamp = now.UnixNano()
+	mutation.ColumnOrSupercolumn.Column.Timestamp = mkint64(now.UnixNano())
 	mmap[string(key)]["certificate"] = append(
 		mmap[string(key)]["certificate"], mutation)
 
@@ -255,7 +224,7 @@ func (db *X509KeyDB) AddX509Certificate(cert *x509.Certificate) error {
 	mutation.ColumnOrSupercolumn.Column.Name = []byte("expires")
 	mutation.ColumnOrSupercolumn.Column.Value = make([]byte, 8)
 	binary.BigEndian.PutUint64(mutation.ColumnOrSupercolumn.Column.Value, expires)
-	mutation.ColumnOrSupercolumn.Column.Timestamp = now.UnixNano()
+	mutation.ColumnOrSupercolumn.Column.Timestamp = mkint64(now.UnixNano())
 	mmap[string(key)]["certificate"] = append(
 		mmap[string(key)]["certificate"], mutation)
 
@@ -264,20 +233,10 @@ func (db *X509KeyDB) AddX509Certificate(cert *x509.Certificate) error {
 	mutation.ColumnOrSupercolumn.Column = cassandra.NewColumn()
 	mutation.ColumnOrSupercolumn.Column.Name = []byte("der_certificate")
 	mutation.ColumnOrSupercolumn.Column.Value = cert.Raw
-	mutation.ColumnOrSupercolumn.Column.Timestamp = now.UnixNano()
+	mutation.ColumnOrSupercolumn.Column.Timestamp = mkint64(now.UnixNano())
 	mmap[string(key)]["certificate"] = append(
 		mmap[string(key)]["certificate"], mutation)
 
 	// Commit the data into the database.
-	ire, ue, te, err = db.db.BatchMutate(mmap, cassandra.ConsistencyLevel_QUORUM)
-	if ire != nil {
-		return errors.New(ire.Why)
-	}
-	if ue != nil {
-		return errors.New("Unavailable")
-	}
-	if te != nil {
-		return errors.New("Timed out")
-	}
-	return err
+	return db.db.BatchMutate(mmap, cassandra.ConsistencyLevel_QUORUM)
 }

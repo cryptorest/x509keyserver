@@ -29,10 +29,9 @@
  * OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-package x509keyserver
+package keydb
 
 import (
-	"github.com/golang/protobuf/proto"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"database/cassandra"
@@ -40,9 +39,12 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/golang/protobuf/proto"
+	"github.com/tonnerre/x509keyserver"
 )
 
-// Object for retrieving X.509 certificates from the Cassandra database.
+// X509KeyDB retrieves X.509 certificates from a Cassandra database.
 type X509KeyDB struct {
 	db *cassandra.RetryCassandraClient
 }
@@ -55,7 +57,9 @@ var certificate_AllColumns [][]byte = [][]byte{
 	[]byte("subject"), []byte("issuer"), []byte("expires"), []byte("der_certificate"),
 }
 
-func formatCertSubject(name pkix.Name) []byte {
+// FormatCertSubject converts the specified certificate name field into a string
+// which can be presented to the user.
+func FormatCertSubject(name pkix.Name) []byte {
 	var ret, val string
 
 	for _, val = range name.Country {
@@ -79,7 +83,8 @@ func formatCertSubject(name pkix.Name) []byte {
 	return []byte(fmt.Sprintf("%s/CN=%s", ret, name.CommonName))
 }
 
-// Connect to the X.509 key database given as "dbserver" and "keyspace".
+// NewX509KeyDB connects to the X.509 key database given as "dbserver" and
+// "keyspace".
 func NewX509KeyDB(dbserver, keyspace string) (*X509KeyDB, error) {
 	var client *cassandra.RetryCassandraClient
 	var err error
@@ -99,9 +104,10 @@ func NewX509KeyDB(dbserver, keyspace string) (*X509KeyDB, error) {
 	}, nil
 }
 
-// List the next "count" known certificates starting from "start_index".
-func (db *X509KeyDB) ListCertificates(start_index uint64, count int32) ([]*X509KeyData, error) {
-	var ret []*X509KeyData
+// ListCertificates lists the next "count" known certificates starting from
+// "start_index".
+func (db *X509KeyDB) ListCertificates(start_index uint64, count int32) ([]*x509keyserver.X509KeyData, error) {
+	var ret []*x509keyserver.X509KeyData
 	var cp *cassandra.ColumnParent = cassandra.NewColumnParent()
 	var pred *cassandra.SlicePredicate = cassandra.NewSlicePredicate()
 	var kr *cassandra.KeyRange = cassandra.NewKeyRange()
@@ -128,7 +134,7 @@ func (db *X509KeyDB) ListCertificates(start_index uint64, count int32) ([]*X509K
 	}
 
 	for _, ks = range r {
-		var rv *X509KeyData = new(X509KeyData)
+		var rv *x509keyserver.X509KeyData = new(x509keyserver.X509KeyData)
 		var cos *cassandra.ColumnOrSuperColumn
 		rv.Index = proto.Uint64(binary.BigEndian.Uint64(ks.Key))
 
@@ -157,7 +163,8 @@ func (db *X509KeyDB) ListCertificates(start_index uint64, count int32) ([]*X509K
 	return ret, nil
 }
 
-// Retrieve the certificate with the given index number from the database.
+// RetrieveCertificateByIndex retrieves the certificate with the given index
+// number assigned by the issuer from the database.
 func (db *X509KeyDB) RetrieveCertificateByIndex(index uint64) (*x509.Certificate, error) {
 	var cp *cassandra.ColumnPath = cassandra.NewColumnPath()
 	var r *cassandra.ColumnOrSuperColumn
@@ -181,7 +188,7 @@ func (db *X509KeyDB) RetrieveCertificateByIndex(index uint64) (*x509.Certificate
 	return x509.ParseCertificate(r.Column.Value)
 }
 
-// Add all relevant data for the given X.509 certificate.
+// AddX509Certificate adds all relevant data for the given X.509 certificate.
 func (db *X509KeyDB) AddX509Certificate(cert *x509.Certificate) error {
 	var now time.Time = time.Now()
 	var mmap = make(map[string]map[string][]*cassandra.Mutation)
@@ -198,7 +205,7 @@ func (db *X509KeyDB) AddX509Certificate(cert *x509.Certificate) error {
 	mutation.ColumnOrSupercolumn = cassandra.NewColumnOrSuperColumn()
 	mutation.ColumnOrSupercolumn.Column = cassandra.NewColumn()
 	mutation.ColumnOrSupercolumn.Column.Name = []byte("subject")
-	mutation.ColumnOrSupercolumn.Column.Value = formatCertSubject(cert.Subject)
+	mutation.ColumnOrSupercolumn.Column.Value = FormatCertSubject(cert.Subject)
 	mutation.ColumnOrSupercolumn.Column.Timestamp = &ts
 	mmap[string(key)]["certificate"] = append(
 		mmap[string(key)]["certificate"], mutation)
@@ -207,7 +214,7 @@ func (db *X509KeyDB) AddX509Certificate(cert *x509.Certificate) error {
 	mutation.ColumnOrSupercolumn = cassandra.NewColumnOrSuperColumn()
 	mutation.ColumnOrSupercolumn.Column = cassandra.NewColumn()
 	mutation.ColumnOrSupercolumn.Column.Name = []byte("issuer")
-	mutation.ColumnOrSupercolumn.Column.Value = formatCertSubject(cert.Issuer)
+	mutation.ColumnOrSupercolumn.Column.Value = FormatCertSubject(cert.Issuer)
 	mutation.ColumnOrSupercolumn.Column.Timestamp = &ts
 	mmap[string(key)]["certificate"] = append(
 		mmap[string(key)]["certificate"], mutation)

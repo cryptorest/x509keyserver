@@ -35,16 +35,17 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"flag"
-	"github.com/tonnerre/x509keyserver"
 	"io/ioutil"
 	"log"
+
+	"github.com/tonnerre/x509keyserver/keydb"
 )
 
 func main() {
 	var pemblock *pem.Block
 	var pemdata []byte
 	var cert *x509.Certificate
-	var kdb *x509keyserver.X509KeyDB
+	var kdb *keydb.X509KeyDB
 	var dbserver, keyspace string
 	var certpath string
 	var err error
@@ -59,7 +60,7 @@ func main() {
 	flag.Parse()
 
 	// Set up the connection to the key database.
-	kdb, err = x509keyserver.NewX509KeyDB(dbserver, keyspace)
+	kdb, err = keydb.NewX509KeyDB(dbserver, keyspace)
 	if err != nil {
 		log.Fatal("Error connecting to key database: ", err)
 	}
